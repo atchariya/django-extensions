@@ -125,7 +125,8 @@ def dia2django(archivo):
 
                     if j.getAttribute("name") == "comment":
                         mycomment = j.getElementsByTagName("dia:string")[0].childNodes[0].data[5:-1]
-                        clases[actclas][4] = "unicode(" + mycomment + ") or u''"
+                        if len(mycomment) > 0:
+                            clases[actclas][4] = "unicode(" + mycomment + ") or u''"
 
                     if j.getAttribute("name") == "attributes":
                         for l in j.getElementsByTagName("dia:composite"):
@@ -235,7 +236,7 @@ def dia2django(archivo):
                                         first_field = nc
 
                         if len(clases[actclas][4]) == 0:
-                            clases[actclas][4] = "unicode(self." + first_field + ")  or u''"
+                            clases[actclas][4] = "unicode(self." + first_field + ") or u''"
 
         elif i.getAttribute("type") == "UML - Generalization":
             mycons = ['A', 'A']
