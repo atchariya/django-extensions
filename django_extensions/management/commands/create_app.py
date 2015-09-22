@@ -140,6 +140,6 @@ def generate_models_and_admin(dia_path, app_dir, project_name, app_name):
     open(model_path, 'w').write(models_txt)
 
     classes = re.findall('class (\w+)', models_txt)
-    admin_txt = 'from django.contrib.admin import site, ModelAdmin\n' + format_text('from %s.%s.models import %s' % (project_name, app_name, ', '.join(classes)), indent=True)
+    admin_txt = 'from django.contrib.admin import site, ModelAdmin\n' + format_text('from %s.models import %s' % (app_name, ', '.join(classes)), indent=True)
     admin_txt += format_text('\n\n%s' % '\n'.join(map((lambda t: 'site.register(%s)' % t), classes)))
     open(admin_path, 'w').write(admin_txt)

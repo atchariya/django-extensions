@@ -13,6 +13,8 @@ import codecs
 import gzip
 import re
 import sys
+from pprint import pprint
+import xml.etree.ElementTree as ET
 from xml.dom.minidom import *  # NOQA
 
 import six
@@ -66,6 +68,33 @@ def addparentstofks(rels, fks):
             fks[son][0].append(parent)
 
 
+
+def addassoctofks(rels, fks):
+    """Gets a list of relations, between parents and sons and a dict of
+    clases named in dia, and modifies the fks to add the parent as fk to get
+    order on the output of classes and replaces the base class of the son, to
+    put the class parent name.
+    """
+    # pprint(fks)
+    for j in rels:
+        parent = index(fks, j[1])
+        dep_name = index(fks, j[0])
+
+        relation = dep_name.lower() + " = models.ForeignKey(" + dep_name + ")\n    relation"
+        fks[parent][2] = fks[parent][2].replace("relation", relation)
+        # if parent not in fks[son][0]:
+        #     fks[son][0].append(parent)
+
+def cleanupoutput(clases):
+    for j in clases:
+        clases[j][2] = clases[j][2].replace("    relation\n", "")
+
+def dia2file(archivo):
+    f = codecs.open(archivo, "rb")
+    #dia files are gzipped
+    data = gzip.GzipFile(fileobj=f).read()
+    return data
+
 def dia2django(archivo):
     models_txt = ''
     f = codecs.open(archivo, "rb")
@@ -76,31 +105,63 @@ def dia2django(archivo):
     datos = ppal.getElementsByTagName("dia:diagram")[0].getElementsByTagName("dia:layer")[0].getElementsByTagName("dia:object")
     clases = {}
     herit = []
+    assoc = []
     imports = six.u("")
     for i in datos:
         #Look for the classes
         if i.getAttribute("type") == "UML - Class":
             myid = i.getAttribute("id")
+
             for j in i.childNodes:
                 if j.nodeType == Node.ELEMENT_NODE and j.hasAttributes():
+                    first_field = ""
+
+
                     if j.getAttribute("name") == "name":
                         actclas = j.getElementsByTagName("dia:string")[0].childNodes[0].data[1:-1]
                         myname = "\nclass %s(models.Model) :\n" % actclas
-                        clases[actclas] = [[], myid, myname, 0]
+                        clases[actclas] = [[], myid, myname, 0, ""]
+                        # print "m2: " + mycomment
+
+                    # if j.getAttribute("name") == "comment":
+                    #     mycomment = j.getElementsByTagName("dia:string")[0].childNodes[0].data[5:-1]
+                    #     clases[actclas][4] = mycomment
+
                     if j.getAttribute("name") == "attributes":
                         for l in j.getElementsByTagName("dia:composite"):
                             if l.getAttribute("type") == "umlattribute":
                                 #Look for the attribute name and type
+                                comment = ""
                                 for k in l.getElementsByTagName("dia:attribute"):
                                     if k.getAttribute("name") == "name":
                                         nc = k.getElementsByTagName("dia:string")[0].childNodes[0].data[1:-1]
+
+                                    elif k.getAttribute("name") == "comment":
+                                        list = k.getElementsByTagName("dia:string")[0].childNodes[0].data[1:-1]
+                                        if val == '##':
+                                            val = ''
+                                        else:
+                                            list = list.split("\n")
+                                            if list[0].startswith("#"):
+                                                comment = list[0]
+                                                del list[0]
+                                            val = ', '.join(map(str,list))
+
                                     elif k.getAttribute("name") == "type":
                                         tc = k.getElementsByTagName("dia:string")[0].childNodes[0].data[1:-1]
+
+                                        if tc.lower().startswith("fk") or tc.lower().startswith("mm"):
+                                            relation_name = tc[3:-1]
+                                            # if dependclasses.count(relation_name) == 0:
+                                                    # dependclasses.append(relation_name)
+                                            continue
+
                                     elif k.getAttribute("name") == "value":
                                         val = k.getElementsByTagName("dia:string")[0].childNodes[0].data[1:-1]
                                         if val == '##':
                                             val = ''
                                     elif k.getAttribute("name") == "visibility" and k.getElementsByTagName("dia:enum")[0].getAttribute("val") == "2":
+
                                         if tc.replace(" ", "").lower().startswith("manytomanyfield("):
                                                 #If we find a class not in our model that is marked as being to another model
                                                 newc = tc.replace(" ", "")[16:-1]
@@ -111,6 +172,7 @@ def dia2django(archivo):
                                                 newc = tc.replace(" ", "")[11:-1]
                                                 if dependclasses.count(newc) == 0:
                                                         dependclasses.append(newc)
+
 
                                 #Mapping SQL types to Django
                                 varch = v2c.search(tc)
@@ -146,20 +208,41 @@ def dia2django(archivo):
                                     if len(val) > 0:
                                         tc = tc.replace(")", "," + val + ")")
                                 elif varch is None:
-                                    tc = "models." + tsd[tc.strip().lower()] + "(" + val + ")"
+                                    if tc.lower().startswith("fk"):
+                                        tc = "models.ForeignKey" + "(" + relation_name + ")"
+                                        #Adding foreign classes
+                                        if relation_name not in dependclasses:
+                                            #In case we are using Auth classes
+                                            clases[actclas][0].append(relation_name)
+                                    elif tc.lower().startswith("mm"):
+                                        tc = "models.ManyToManyField" + "(" + relation_name + ")"
+                                        if relation_name not in dependclasses:
+                                            #In case we are using Auth classes
+                                            clases[actclas][0].append(relation_name)
+                                    else:
+                                        tc = "models." + tsd[tc.strip().lower()] + "(" + val + ")"
                                 else:
                                     tc = "models.CharField(max_length=" + varch.group(1) + ")"
                                     if len(val) > 0:
-                                        tc = tc.replace(")", ", " + val + " )")
+                                        tc = tc.replace(")", ", " + val + ")")
+
+                                if len(comment) > 0:
+                                    tc = tc + " " + comment
+
                                 if not (nc == "id" and tc == "AutoField()"):
                                     clases[actclas][2] = clases[actclas][2] + ("    %s = %s\n" % (nc, tc))
+                                    if len(first_field) == 0:
+                                        first_field = nc
+
+                        if len(clases[actclas][4]) == 0:
+                            clases[actclas][4] = "self." + first_field
+
         elif i.getAttribute("type") == "UML - Generalization":
             mycons = ['A', 'A']
             a = i.getElementsByTagName("dia:connection")
             for j in a:
                 if len(j.getAttribute("to")):
                     mycons[int(j.getAttribute("handle"))] = j.getAttribute("to")
-            print(mycons)
             if 'A' not in mycons:
                 herit.append(mycons)
         elif i.getAttribute("type") == "UML - SmallPackage":
@@ -167,18 +250,43 @@ def dia2django(archivo):
             for j in a:
                 if len(j.childNodes[0].data[1:-1]):
                     imports += six.u("from %s.models import *" % j.childNodes[0].data[1:-1])
+        elif i.getAttribute("type") == "UML - Association":
+            mycons = ['A', 'A']
+            related_name = ''
+            for k in i.getElementsByTagName("dia:attribute"):
+                if k.getAttribute("name") == "name":
+                    relation_name = k.getElementsByTagName("dia:string")[0].childNodes[0].data[1:-1]
+
+            a = i.getElementsByTagName("dia:connection")
+            for j in a:
+                if len(j.getAttribute("to")):
+                    mycons[int(j.getAttribute("handle"))] = j.getAttribute("to")
+
+            if 'A' not in mycons:
+                assoc.append(mycons)
 
     addparentstofks(herit, clases)
+    # addassoctofks(assoc, clases)
+
+    # print "My class"
+    # pprint(clases)
+    # cleanupoutput(clases)
+
     #Ordering the appearance of classes
     #First we make a list of the classes each classs is related to.
     ordered = []
+    # pprint(dependclasses)
     for j, k in six.iteritems(clases):
-        k[2] = k[2] + "\n    def %s(self):\n        return u\"\"\n" % (("__str__" if six.PY3 else "__unicode__"), )
+        if len(k[4]) > 5 :
+            k[2] = k[2] + "\n    def %s(self):\n        return %s\n" % (("__str__" if six.PY3 else "__unicode__"), k[4] ,)
+        else:
+            k[2] = k[2] + "\n    def %s(self):\n        return u\"\"\n" % (("__str__" if six.PY3 else "__unicode__"), )
+
         for fk in k[0]:
             if fk not in dependclasses:
                 clases[fk][3] += 1
         ordered.append([j] + k)
-
+    # pprint(ordered)
     i = 0
     while i < len(ordered):
         mark = i
@@ -210,6 +318,6 @@ def dia2django(archivo):
 
 if __name__ == '__main__':
     if len(sys.argv) == 2:
-        dia2django(sys.argv[1])
+        print dia2django(sys.argv[1])
     else:
         print(" Use:\n \n   " + sys.argv[0] + " diagram.dia\n\n")
